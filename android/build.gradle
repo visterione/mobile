@@ -19,3 +19,14 @@ buildscript {
 }
 
 apply plugin: "com.facebook.react.rootproject"
+
+// Remove sonatype snapshots repo added by RN plugin — it returns 503 and breaks the build
+allprojects {
+    repositories.all { repo ->
+        if (repo instanceof MavenArtifactRepository) {
+            if (repo.url.toString().contains("sonatype")) {
+                repositories.remove(repo)
+            }
+        }
+    }
+}

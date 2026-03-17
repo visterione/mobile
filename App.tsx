@@ -1,45 +1,53 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
+import React, {useEffect} from 'react';
+import {StatusBar, AppState} from 'react-native';
+import {SafeAreaProvider} from 'react-native-safe-area-context';
+import {AuthProvider, useAuth} from './src/store/authStore';
+import AppNavigator from './src/navigation/AppNavigator';
+import NotificationService from './src/services/notifications';
 
-import { NewAppScreen } from '@react-native/new-app-screen';
-import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
-import {
-  SafeAreaProvider,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+// Register background notification handler (outside React tree)
+NotificationService.registerBackgroundHandler();
 
-function App() {
-  const isDarkMode = useColorScheme() === 'dark';
+function AppInner() {
+  const {user, initialize} = useAuth();
+
+  useEffect(() => {
+    NotificationService.setup();
+    initialize();
+  }, [initialize]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    NotificationService.startForegroundService();
+    NotificationService.attachSocketListeners(user.id);
+
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        // App came to foreground — socket reconnects automatically
+      }
+    });
+
+    return () => {
+      subscription.remove();
+      NotificationService.detachSocketListeners();
+    };
+  }, [user]);
 
   return (
+    <>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <AppNavigator />
+    </>
+  );
+}
+
+export default function App() {
+  return (
     <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent />
+      <AuthProvider>
+        <AppInner />
+      </AuthProvider>
     </SafeAreaProvider>
   );
 }
-
-function AppContent() {
-  const safeAreaInsets = useSafeAreaInsets();
-
-  return (
-    <View style={styles.container}>
-      <NewAppScreen
-        templateFileName="App.tsx"
-        safeAreaInsets={safeAreaInsets}
-      />
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-});
-
-export default App;
