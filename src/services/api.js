@@ -4,25 +4,43 @@ import CONFIG from '../config';
 
 const KEYCHAIN_OPTIONS = {service: 'alfa-wiki'};
 
+// In-memory token cache — avoids Keychain read on every request.
+// Android Keystore can take 100-500ms per read; caching reduces startup
+// from 4+ sequential Keystore hits to a single one.
+let _token = null;
+
+export function setCachedToken(token) {
+  _token = token;
+}
+
+export function clearCachedToken() {
+  _token = null;
+}
+
 const api = axios.create({
   baseURL: CONFIG.API_URL,
   timeout: 30000,
 });
 
-// Attach JWT token to every request
+// Attach JWT token on every request — use in-memory cache, read Keychain only once
 api.interceptors.request.use(async config => {
-  const credentials = await Keychain.getGenericPassword(KEYCHAIN_OPTIONS);
-  if (credentials) {
-    config.headers.Authorization = `Bearer ${credentials.password}`;
+  if (!_token) {
+    const credentials = await Keychain.getGenericPassword(KEYCHAIN_OPTIONS);
+    _token = credentials?.password ?? null;
   }
+  if (_token) {
+    config.headers.Authorization = `Bearer ${_token}`;
+  }
+  config.headers['X-Client-Type'] = 'mobile';
   return config;
 });
 
-// Handle 401
+// Handle 401 — clear token cache so next request re-reads from Keychain
 api.interceptors.response.use(
   response => response,
   async error => {
     if (error.response?.status === 401) {
+      clearCachedToken();
       await Keychain.resetGenericPassword(KEYCHAIN_OPTIONS);
     }
     return Promise.reject(error);
@@ -38,6 +56,9 @@ export const auth = {
     api.post('/auth/verify-2fa', {userId, code}),
   resend2FA: userId =>
     api.post('/auth/resend-2fa', {userId}),
+  updateProfile: data => api.put('/auth/profile', data),
+  changePassword: (currentPassword, newPassword) =>
+    api.post('/auth/change-password', {currentPassword, newPassword}),
 };
 
 // ── Media ────────────────────────────────────────────────────────────────────
@@ -87,18 +108,23 @@ export const chat = {
   leave: chatId => api.delete(`/chat/${chatId}/leave`),
   forwardMessages: (targetChatId, messageIds) =>
     api.post('/chat/forward', {targetChatId, messageIds}),
-  uploadFiles: async (chatId, files) => {
-    const formData = new FormData();
-    files.forEach(file => {
-      formData.append('files', {
-        uri: file.uri,
-        type: file.type || 'application/octet-stream',
-        name: file.name || 'file',
-      });
-    });
-    return api.post(`/chat/${chatId}/upload`, formData, {
-      headers: {'Content-Type': 'multipart/form-data'},
-    });
+  searchMessages: (chatId, q) =>
+    api.get(`/chat/${chatId}/messages/search`, {params: {q}}),
+  uploadFiles: async (_chatId, files) => {
+    const results = await Promise.all(
+      files.map(file => {
+        const formData = new FormData();
+        formData.append('file', {
+          uri: file.uri,
+          type: file.type || 'application/octet-stream',
+          name: file.name || 'file',
+        });
+        return api.post('/chat/upload', formData, {
+          headers: {'Content-Type': 'multipart/form-data'},
+        });
+      }),
+    );
+    return {data: results.map(r => r.data)};
   },
 };
 

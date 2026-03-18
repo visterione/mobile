@@ -4,21 +4,24 @@ import CONFIG from '../config';
 
 let socket = null;
 let _userId = null;
-const listeners = new Map();
+
+// key → {event, callback}  — supports multiple listeners per event via unique keys
+const pendingListeners = new Map();
 
 const SocketService = {
-  async connect(userId) {
+  // token param lets callers pass an already-known token and skip Keychain read
+  async connect(userId, token) {
     if (socket?.connected) {
       return;
     }
 
     _userId = userId;
-    const credentials = await Keychain.getGenericPassword({service: 'alfa-wiki'});
-    const token = credentials?.password;
+    // Only read Keychain if token wasn't provided by the caller
+    const actualToken = token ?? (await Keychain.getGenericPassword({service: 'alfa-wiki'}))?.password;
 
     socket = io(CONFIG.SOCKET_URL, {
       transports: ['websocket'],
-      auth: {token},
+      auth: {token: actualToken},
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
@@ -27,9 +30,9 @@ const SocketService = {
 
     socket.on('connect', () => {
       console.log('[Socket] Connected');
-      // Rejoin user room and re-attach all listeners on every connect/reconnect
       socket.emit('join', _userId);
-      listeners.forEach((callback, event) => {
+      // Re-attach all listeners after (re)connect
+      pendingListeners.forEach(({event, callback}) => {
         socket.off(event, callback);
         socket.on(event, callback);
       });
@@ -49,21 +52,38 @@ const SocketService = {
       socket.disconnect();
       socket = null;
     }
+    _userId = null;
   },
 
-  on(event, callback) {
-    listeners.set(event, callback);
-    if (socket) {
+  /**
+   * Register a listener with a unique key.
+   * Using a key allows multiple components to subscribe to the same event
+   * without overwriting each other.
+   *
+   * @param {string} key    - unique identifier, e.g. 'chatlist:new_message'
+   * @param {string} event  - socket event name
+   * @param {function} callback
+   */
+  on(key, event, callback) {
+    // Remove previous listener for this key (if any)
+    this.off(key);
+
+    pendingListeners.set(key, {event, callback});
+    if (socket?.connected) {
       socket.on(event, callback);
     }
   },
 
-  off(event) {
-    const callback = listeners.get(event);
-    if (callback && socket) {
-      socket.off(event, callback);
+  /**
+   * Remove a listener by its unique key.
+   * @param {string} key
+   */
+  off(key) {
+    const entry = pendingListeners.get(key);
+    if (entry) {
+      if (socket) socket.off(entry.event, entry.callback);
+      pendingListeners.delete(key);
     }
-    listeners.delete(event);
   },
 
   emit(event, data) {

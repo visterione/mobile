@@ -1,8 +1,9 @@
 import React, {createContext, useContext, useState, useCallback} from 'react';
 import * as Keychain from 'react-native-keychain';
-import {auth as authApi} from '../services/api';
+import {auth as authApi, setCachedToken, clearCachedToken} from '../services/api';
 import SocketService from '../services/socket';
 
+const KEYCHAIN_OPTIONS = {service: 'alfa-wiki'};
 const AuthContext = createContext(null);
 
 export function AuthProvider({children}) {
@@ -13,43 +14,47 @@ export function AuthProvider({children}) {
   const initialize = useCallback(async () => {
     setIsLoading(true);
     try {
-      const credentials = await Keychain.getGenericPassword({service: 'alfa-wiki'});
+      const credentials = await Keychain.getGenericPassword(KEYCHAIN_OPTIONS);
       if (credentials) {
+        // Cache token immediately — all subsequent API calls use memory, not Keychain
+        setCachedToken(credentials.password);
         const response = await authApi.me();
-        setUser(response.data.user ?? response.data);
-        await SocketService.connect(response.data.user?.id ?? response.data.id);
+        const userData = response.data.user ?? response.data;
+        setUser(userData);
+        // Connect socket in background — don't block showing the UI
+        SocketService.connect(userData.id, credentials.password).catch(() => {});
       }
     } catch {
       // Token invalid or server unreachable — clear it
-      await Keychain.resetGenericPassword({service: 'alfa-wiki'});
+      clearCachedToken();
+      await Keychain.resetGenericPassword(KEYCHAIN_OPTIONS);
       setUser(null);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  const login = useCallback(async (username, password) => {
-    const response = await authApi.login(username, password);
-    const {token, user: userData} = response.data;
-
-    // Store token securely (Keychain on iOS, Keystore on Android)
-    await Keychain.setGenericPassword('token', token, {
-      service: 'alfa-wiki',
-    });
-
+  // Called after successful login (instead of re-calling initialize)
+  const loginComplete = useCallback((userData) => {
     setUser(userData);
-    await SocketService.connect(userData.id);
-    return userData;
+  }, []);
+
+  const refreshUser = useCallback(async () => {
+    try {
+      const response = await authApi.me();
+      setUser(response.data.user ?? response.data);
+    } catch {}
   }, []);
 
   const logout = useCallback(async () => {
     SocketService.disconnect();
-    await Keychain.resetGenericPassword({service: 'alfa-wiki'});
+    clearCachedToken();
+    await Keychain.resetGenericPassword(KEYCHAIN_OPTIONS);
     setUser(null);
   }, []);
 
   return (
-    <AuthContext.Provider value={{user, isLoading, initialize, login, logout}}>
+    <AuthContext.Provider value={{user, isLoading, initialize, loginComplete, refreshUser, logout}}>
       {children}
     </AuthContext.Provider>
   );

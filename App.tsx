@@ -12,6 +12,7 @@ function AppInner() {
   const {user, initialize} = useAuth();
 
   useEffect(() => {
+    // Run in parallel — setup errors are caught internally, won't block auth
     NotificationService.setup();
     initialize();
   }, [initialize]);
@@ -19,7 +20,11 @@ function AppInner() {
   useEffect(() => {
     if (!user) return;
 
-    NotificationService.startForegroundService();
+    // Both calls are async — wrap in try/catch so any failure is a warning,
+    // not an unhandled rejection that crashes the JS runtime.
+    NotificationService.startForegroundService().catch(e =>
+      console.warn('[App] foreground service error:', e),
+    );
     NotificationService.attachSocketListeners(user.id);
 
     const subscription = AppState.addEventListener('change', state => {
@@ -31,12 +36,13 @@ function AppInner() {
     return () => {
       subscription.remove();
       NotificationService.detachSocketListeners();
+      NotificationService.stopForegroundService().catch(() => {});
     };
   }, [user]);
 
   return (
     <>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <StatusBar barStyle="light-content" backgroundColor="#0056CC" translucent={false} />
       <AppNavigator />
     </>
   );

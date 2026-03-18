@@ -1,4 +1,4 @@
-import React, {useState, useRef, useCallback} from 'react';
+import React, {useState, useRef, useCallback, useEffect} from 'react';
 import {
   View,
   Text,
@@ -10,28 +10,69 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  Animated,
+  Image,
 } from 'react-native';
+import LinearGradient from 'react-native-linear-gradient';
+import {Eye, EyeOff, ShieldCheck, ArrowLeft} from 'lucide-react-native';
 import * as Keychain from 'react-native-keychain';
-import {auth as authApi} from '../../services/api';
+import {auth as authApi, setCachedToken} from '../../services/api';
 import SocketService from '../../services/socket';
 import {useAuth} from '../../store/authStore';
+import {font} from '../../theme';
 
 const KEYCHAIN_OPTIONS = {service: 'alfa-wiki'};
 
 export default function LoginScreen() {
-  const {initialize} = useAuth();
-  const [step, setStep] = useState('credentials'); // 'credentials' | 'twoFactor'
+  const {loginComplete} = useAuth();
+  const [step, setStep] = useState('credentials');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const isMounted = useRef(true);
+  useEffect(() => () => { isMounted.current = false; }, []);
 
   // 2FA state
   const [twoFactorCode, setTwoFactorCode] = useState(['', '', '', '', '', '']);
   const [userId, setUserId] = useState(null);
   const [attemptsLeft, setAttemptsLeft] = useState(5);
-  const [codeStatus, setCodeStatus] = useState(''); // '' | 'error'
+  const [codeStatus, setCodeStatus] = useState('');
   const inputRefs = useRef([]);
+
+  // Card animation
+  const cardOpacity = useRef(new Animated.Value(0)).current;
+  const cardTranslate = useRef(new Animated.Value(24)).current;
+  // Shield float animation
+  const shieldY = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(cardOpacity, {
+        toValue: 1,
+        duration: 480,
+        useNativeDriver: true,
+      }),
+      Animated.timing(cardTranslate, {
+        toValue: 0,
+        duration: 480,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  // Shield float loop on 2FA step
+  useEffect(() => {
+    if (step !== 'twoFactor') return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(shieldY, {toValue: -6, duration: 1500, useNativeDriver: true}),
+        Animated.timing(shieldY, {toValue: 0, duration: 1500, useNativeDriver: true}),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [step]);
 
   // ── Step 1: credentials ──────────────────────────────────────────────────
   const handleCredentialsSubmit = async () => {
@@ -42,7 +83,6 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       const {data} = await authApi.login(username.trim(), password);
-
       if (data.requiresTwoFactor) {
         setUserId(data.userId);
         setStep('twoFactor');
@@ -55,7 +95,7 @@ export default function LoginScreen() {
     } catch (error) {
       Alert.alert('Ошибка входа', error.response?.data?.error || 'Проверьте логин и пароль');
     } finally {
-      setLoading(false);
+      if (isMounted.current) setLoading(false);
     }
   };
 
@@ -77,14 +117,12 @@ export default function LoginScreen() {
           setCodeStatus('');
           inputRefs.current[0]?.focus();
         }, 600);
-
         if (errorData?.attemptsLeft !== undefined) {
           setAttemptsLeft(errorData.attemptsLeft);
           Alert.alert('Неверный код', `Осталось попыток: ${errorData.attemptsLeft}`);
         } else {
           Alert.alert('Ошибка', errorData?.error || 'Неверный код');
         }
-
         if (
           errorData?.error?.includes('expired') ||
           errorData?.error?.includes('Too many') ||
@@ -98,7 +136,7 @@ export default function LoginScreen() {
           }, 800);
         }
       } finally {
-        setLoading(false);
+        if (isMounted.current) setLoading(false);
       }
     },
     [userId],
@@ -129,19 +167,13 @@ export default function LoginScreen() {
     setAttemptsLeft(5);
   };
 
-  // ── Code input handlers ──────────────────────────────────────────────────
   const handleCodeChange = (index, value) => {
     if (loading || codeStatus) return;
     const digit = value.replace(/\D/g, '').slice(-1);
     const newCode = [...twoFactorCode];
     newCode[index] = digit;
     setTwoFactorCode(newCode);
-
-    if (digit && index < 5) {
-      inputRefs.current[index + 1]?.focus();
-    }
-
-    // Auto-submit when all 6 filled
+    if (digit && index < 5) inputRefs.current[index + 1]?.focus();
     if (digit && index === 5) {
       const full = newCode.join('');
       if (full.length === 6) handleTwoFactorSubmit(full);
@@ -167,238 +199,326 @@ export default function LoginScreen() {
     }
   };
 
-  // ── Finalize login ───────────────────────────────────────────────────────
   const finishLogin = async (token, userData) => {
     await Keychain.setGenericPassword('token', token, KEYCHAIN_OPTIONS);
-    await SocketService.connect(userData.id);
-    await initialize(); // triggers conditional navigator to switch to AppStack
+    // Cache token in memory so subsequent API calls skip Keychain reads
+    setCachedToken(token);
+    // Stop native-driver animations before unmounting to prevent native view crash
+    cardOpacity.stopAnimation();
+    cardTranslate.stopAnimation();
+    shieldY.stopAnimation();
+    loginComplete(userData);
+    // Connect socket — pass token directly to avoid another Keychain read
+    SocketService.connect(userData.id, token).catch(() => {});
   };
 
-  // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        keyboardShouldPersistTaps="handled">
-        <View style={styles.card}>
-          <Text style={styles.title}>alfa-wiki</Text>
+    <LinearGradient
+      colors={['#0a3d62', '#1e3799', '#4a148c']}
+      start={{x: 0, y: 0}}
+      end={{x: 1, y: 1}}
+      style={styles.bg}>
+      <KeyboardAvoidingView
+        style={styles.kav}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled">
 
-          {step === 'credentials' ? (
-            <>
-              <Text style={styles.subtitle}>Войдите в систему</Text>
+          <Animated.View
+            style={[
+              styles.card,
+              {opacity: cardOpacity, transform: [{translateY: cardTranslate}]},
+            ]}>
 
-              <TextInput
-                style={styles.input}
-                placeholder="Логин"
-                placeholderTextColor="#9CA3AF"
-                value={username}
-                onChangeText={setUsername}
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="next"
-              />
+            {step === 'credentials' ? (
+              <>
+                {/* Logo */}
+                <View style={styles.logoWrap}>
+                  <LinearGradient
+                    colors={['#0a3d62', '#1e3799']}
+                    start={{x: 0, y: 0}}
+                    end={{x: 1, y: 1}}
+                    style={styles.logoBg}>
+                    <Image
+                      source={require('../../../assets/images/logo.png')}
+                      style={styles.logoIcon}
+                      resizeMode="contain"
+                    />
+                  </LinearGradient>
+                </View>
 
-              <View style={styles.passwordWrap}>
-                <TextInput
-                  style={styles.passwordInput}
-                  placeholder="Пароль"
-                  placeholderTextColor="#9CA3AF"
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry={!showPassword}
-                  returnKeyType="done"
-                  onSubmitEditing={handleCredentialsSubmit}
-                />
-                <TouchableOpacity
-                  style={styles.eyeBtn}
-                  onPress={() => setShowPassword(v => !v)}>
-                  <Text style={styles.eyeText}>{showPassword ? '🙈' : '👁️'}</Text>
-                </TouchableOpacity>
-              </View>
+                <Text style={styles.title}>alfa-wiki</Text>
+                <Text style={styles.subtitle}>Войдите в систему</Text>
 
-              <TouchableOpacity
-                style={[styles.button, loading && styles.buttonDisabled]}
-                onPress={handleCredentialsSubmit}
-                disabled={loading}>
-                {loading ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.buttonText}>Войти</Text>
-                )}
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              <View style={styles.shieldIcon}>
-                <Text style={styles.shieldEmoji}>🛡️</Text>
-              </View>
-              <Text style={styles.subtitle}>Двухфакторная аутентификация</Text>
-              <Text style={styles.tfaHint}>
-                Введите 6-значный код, отправленный на вашу почту
-              </Text>
-
-              <View style={styles.codeRow}>
-                {twoFactorCode.map((digit, index) => (
+                <View style={styles.formGroup}>
+                  <Text style={styles.label}>Логин</Text>
                   <TextInput
-                    key={index}
-                    ref={el => (inputRefs.current[index] = el)}
-                    style={[
-                      styles.codeInput,
-                      digit ? styles.codeInputFilled : null,
-                      codeStatus === 'error' ? styles.codeInputError : null,
-                    ]}
-                    value={digit}
-                    onChangeText={v => handleCodeChange(index, v)}
-                    onKeyPress={e => handleCodeKeyDown(index, e)}
-                    keyboardType="number-pad"
-                    maxLength={1}
-                    textAlign="center"
-                    editable={!loading && !codeStatus}
+                    style={styles.input}
+                    placeholder="Введите логин"
+                    placeholderTextColor="#AEAEB2"
+                    value={username}
+                    onChangeText={setUsername}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    returnKeyType="next"
                   />
-                ))}
-              </View>
+                </View>
 
-              {attemptsLeft < 5 && (
-                <Text style={styles.attemptsText}>
-                  Осталось попыток: {attemptsLeft}
+                <View style={styles.formGroup}>
+                  <Text style={styles.label}>Пароль</Text>
+                  <View style={styles.passwordWrap}>
+                    <TextInput
+                      style={styles.passwordInput}
+                      placeholder="Введите пароль"
+                      placeholderTextColor="#AEAEB2"
+                      value={password}
+                      onChangeText={setPassword}
+                      secureTextEntry={!showPassword}
+                      returnKeyType="done"
+                      onSubmitEditing={handleCredentialsSubmit}
+                    />
+                    <TouchableOpacity
+                      style={styles.eyeBtn}
+                      onPress={() => setShowPassword(v => !v)}>
+                      {showPassword
+                        ? <EyeOff size={20} color="#86868B" />
+                        : <Eye size={20} color="#86868B" />}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  onPress={handleCredentialsSubmit}
+                  disabled={loading}
+                  activeOpacity={0.85}>
+                  <LinearGradient
+                    colors={loading ? ['#93C5FD', '#93C5FD'] : ['#007AFF', '#5856D6']}
+                    start={{x: 0, y: 0}}
+                    end={{x: 1, y: 0}}
+                    style={styles.button}>
+                    {loading
+                      ? <ActivityIndicator color="#FFFFFF" />
+                      : <Text style={styles.buttonText}>Войти</Text>}
+                  </LinearGradient>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <Animated.View style={[styles.shieldWrap, {transform: [{translateY: shieldY}]}]}>
+                  <LinearGradient
+                    colors={['#007AFF', '#5856D6']}
+                    start={{x: 0, y: 0}}
+                    end={{x: 1, y: 1}}
+                    style={styles.shieldIcon}>
+                    <ShieldCheck size={36} color="#FFFFFF" />
+                  </LinearGradient>
+                </Animated.View>
+
+                <Text style={styles.title}>Двухфакторная аутентификация</Text>
+                <Text style={styles.tfaHint}>
+                  Введите 6-значный код, отправленный на вашу почту
                 </Text>
-              )}
 
-              <TouchableOpacity
-                style={styles.resendBtn}
-                onPress={handleResendCode}
-                disabled={loading}>
-                <Text style={styles.resendText}>Отправить код повторно</Text>
-              </TouchableOpacity>
+                <View style={styles.codeRow}>
+                  {twoFactorCode.map((digit, index) => (
+                    <TextInput
+                      key={index}
+                      ref={el => (inputRefs.current[index] = el)}
+                      style={[
+                        styles.codeInput,
+                        digit ? styles.codeInputFilled : null,
+                        codeStatus === 'error' ? styles.codeInputError : null,
+                      ]}
+                      value={digit}
+                      onChangeText={v => handleCodeChange(index, v)}
+                      onKeyPress={e => handleCodeKeyDown(index, e)}
+                      keyboardType="number-pad"
+                      maxLength={1}
+                      textAlign="center"
+                      editable={!loading && !codeStatus}
+                    />
+                  ))}
+                </View>
 
-              <TouchableOpacity
-                style={styles.backBtn}
-                onPress={handleBackToLogin}
-                disabled={loading}>
-                <Text style={styles.backText}>← Вернуться к входу</Text>
-              </TouchableOpacity>
+                {attemptsLeft < 5 && (
+                  <Text style={styles.attemptsText}>
+                    Осталось попыток: {attemptsLeft}
+                  </Text>
+                )}
 
-              {loading && (
-                <ActivityIndicator
-                  color="#2563EB"
-                  style={{marginTop: 16}}
-                />
-              )}
-            </>
-          )}
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+                {loading && <ActivityIndicator color="#007AFF" style={{marginVertical: 12}} />}
+
+                <TouchableOpacity
+                  style={styles.resendBtn}
+                  onPress={handleResendCode}
+                  disabled={loading}>
+                  <Text style={styles.resendText}>Отправить код повторно</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.backBtn}
+                  onPress={handleBackToLogin}
+                  disabled={loading}>
+                  <ArrowLeft size={15} color="#86868B" style={{marginRight: 6}} />
+                  <Text style={styles.backText}>Вернуться к входу</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </Animated.View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {flex: 1, backgroundColor: '#F3F4F6'},
-  scroll: {flexGrow: 1, justifyContent: 'center', paddingHorizontal: 24, paddingVertical: 40},
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 28,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    shadowOffset: {width: 0, height: 4},
-    elevation: 4,
+  bg: {flex: 1},
+  kav: {flex: 1},
+  scroll: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 48,
   },
+  card: {
+    backgroundColor: 'rgba(255,255,255,0.97)',
+    borderRadius: 24,
+    paddingHorizontal: 32,
+    paddingVertical: 40,
+    shadowColor: '#000',
+    shadowOpacity: 0.22,
+    shadowRadius: 32,
+    shadowOffset: {width: 0, height: 12},
+    elevation: 16,
+  },
+
+  // Logo
+  logoWrap: {alignItems: 'center', marginBottom: 16},
+  logoBg: {
+    borderRadius: 20,
+    padding: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoIcon: {
+    width: 120,
+    height: 80,
+  },
+
+  // Title
   title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#2563EB',
+    fontSize: 26,
+    fontFamily: font.bold,
+    color: '#1D1D1F',
     textAlign: 'center',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   subtitle: {
     fontSize: 15,
-    color: '#6B7280',
+    color: '#86868B',
     textAlign: 'center',
-    marginBottom: 24,
+    marginBottom: 28,
+    fontFamily: font.medium,
+  },
+
+  // Form
+  formGroup: {marginBottom: 18},
+  label: {
+    fontSize: 14,
+    fontFamily: font.medium,
+    color: '#86868B',
+    marginBottom: 8,
   },
   input: {
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 10,
+    height: 52,
+    backgroundColor: '#F5F5F7',
+    borderWidth: 1.5,
+    borderColor: '#D2D2D7',
+    borderRadius: 14,
     paddingHorizontal: 16,
-    paddingVertical: 13,
-    fontSize: 15,
-    color: '#111827',
-    marginBottom: 14,
+    fontSize: 16,
+    fontFamily: font.regular,
+    color: '#1D1D1F',
   },
   passwordWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 10,
-    marginBottom: 14,
+    height: 52,
+    backgroundColor: '#F5F5F7',
+    borderWidth: 1.5,
+    borderColor: '#D2D2D7',
+    borderRadius: 14,
   },
   passwordInput: {
     flex: 1,
     paddingHorizontal: 16,
-    paddingVertical: 13,
-    fontSize: 15,
-    color: '#111827',
+    fontSize: 16,
+    fontFamily: font.regular,
+    color: '#1D1D1F',
   },
   eyeBtn: {paddingHorizontal: 14},
-  eyeText: {fontSize: 18},
+
+  // Button
   button: {
-    backgroundColor: '#2563EB',
-    borderRadius: 10,
-    paddingVertical: 14,
+    height: 52,
+    borderRadius: 14,
     alignItems: 'center',
-    marginTop: 6,
+    justifyContent: 'center',
+    marginTop: 8,
   },
-  buttonDisabled: {backgroundColor: '#93C5FD'},
-  buttonText: {color: '#FFFFFF', fontSize: 16, fontWeight: '600'},
+  buttonText: {color: '#FFFFFF', fontSize: 16, fontFamily: font.semiBold},
+
   // 2FA
-  shieldIcon: {alignItems: 'center', marginBottom: 8},
-  shieldEmoji: {fontSize: 40},
+  shieldWrap: {alignItems: 'center', marginBottom: 20},
+  shieldIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   tfaHint: {
-    fontSize: 13,
-    color: '#6B7280',
+    fontSize: 14,
+    fontFamily: font.regular,
+    color: '#86868B',
     textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 18,
+    marginBottom: 28,
+    lineHeight: 20,
   },
   codeRow: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 10,
+    gap: 8,
     marginBottom: 16,
   },
   codeInput: {
-    width: 44,
-    height: 54,
+    width: 46,
+    height: 56,
     borderWidth: 2,
-    borderColor: '#E5E7EB',
-    borderRadius: 10,
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#111827',
-    backgroundColor: '#F9FAFB',
+    borderColor: '#D2D2D7',
+    borderRadius: 14,
+    fontSize: 24,
+    fontFamily: font.bold,
+    color: '#1D1D1F',
+    backgroundColor: '#F5F5F7',
   },
-  codeInputFilled: {borderColor: '#2563EB', backgroundColor: '#EFF6FF'},
-  codeInputError: {borderColor: '#EF4444', backgroundColor: '#FEF2F2'},
+  codeInputFilled: {borderColor: '#007AFF', backgroundColor: '#E5F2FF'},
+  codeInputError: {borderColor: '#FF3B30', backgroundColor: '#FFF2F1'},
   attemptsText: {
     textAlign: 'center',
-    color: '#EF4444',
+    color: '#FF3B30',
     fontSize: 13,
     marginBottom: 12,
+    fontFamily: font.medium,
   },
-  resendBtn: {
+  resendBtn: {alignItems: 'center', paddingVertical: 14},
+  resendText: {color: '#007AFF', fontSize: 15, fontFamily: font.medium},
+  backBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    marginBottom: 4,
+    justifyContent: 'center',
+    paddingVertical: 10,
   },
-  resendText: {color: '#2563EB', fontSize: 14, fontWeight: '500'},
-  backBtn: {alignItems: 'center', paddingVertical: 10},
-  backText: {color: '#6B7280', fontSize: 14},
+  backText: {color: '#86868B', fontSize: 14, fontFamily: font.regular},
 });

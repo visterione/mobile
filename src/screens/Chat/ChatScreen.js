@@ -19,11 +19,31 @@ import {
 } from 'react-native';
 import {launchImageLibrary, launchCamera} from 'react-native-image-picker';
 import {pick as pickDocument} from '@react-native-documents/picker';
+import {
+  Send,
+  Paperclip,
+  Smile,
+  X,
+  Reply,
+  Pencil,
+  Trash2,
+  Forward,
+  Image as ImageIcon,
+  Camera,
+  File,
+  Video,
+  FileText,
+  Archive,
+  Search,
+  ChevronUp,
+  ChevronDown,
+} from 'lucide-react-native';
 import {chat as chatApi} from '../../services/api';
 import SocketService from '../../services/socket';
 import {useAuth} from '../../store/authStore';
 import avatarUrl from '../../utils/avatarUrl';
 import CONFIG from '../../config';
+import {colors, radius, shadow, font} from '../../theme';
 
 const BASE_URL = CONFIG.API_URL.replace('/api', '');
 const {width: SCREEN_WIDTH} = Dimensions.get('window');
@@ -139,12 +159,13 @@ function Attachments({attachments, isOwn, onImagePress}) {
         }
 
         if (mime.startsWith('video/')) {
+          const iconColor = isOwn ? 'rgba(255,255,255,0.9)' : colors.textPrimary;
           return (
             <TouchableOpacity
               key={idx}
               style={[styles.attachFile, isOwn && styles.attachFileOwn]}
               onPress={() => url && Linking.openURL(url)}>
-              <Text style={styles.attachFileIcon}>🎬</Text>
+              <Video size={22} color={iconColor} />
               <View style={styles.attachFileInfo}>
                 <Text style={[styles.attachFileName, isOwn && styles.attachFileNameOwn]} numberOfLines={1}>{att.name}</Text>
                 <Text style={[styles.attachFileSize, isOwn && styles.attachFileSizeOwn]}>{formatFileSize(att.size)}</Text>
@@ -153,14 +174,17 @@ function Attachments({attachments, isOwn, onImagePress}) {
           );
         }
 
-        const icon = mime.includes('pdf') ? '📄' : mime.includes('word') || mime.includes('doc') ? '📝' : mime.includes('excel') || mime.includes('sheet') ? '📊' : mime.includes('zip') || mime.includes('rar') ? '🗜️' : '📎';
+        const FileIcon = mime.includes('pdf') ? FileText
+          : mime.includes('zip') || mime.includes('rar') ? Archive
+          : File;
+        const iconColor = isOwn ? 'rgba(255,255,255,0.9)' : colors.textPrimary;
 
         return (
           <TouchableOpacity
             key={idx}
             style={[styles.attachFile, isOwn && styles.attachFileOwn]}
             onPress={() => url && Linking.openURL(url)}>
-            <Text style={styles.attachFileIcon}>{icon}</Text>
+            <FileIcon size={22} color={iconColor} />
             <View style={styles.attachFileInfo}>
               <Text style={[styles.attachFileName, isOwn && styles.attachFileNameOwn]} numberOfLines={1}>{att.name}</Text>
               <Text style={[styles.attachFileSize, isOwn && styles.attachFileSizeOwn]}>{formatFileSize(att.size)}</Text>
@@ -173,7 +197,7 @@ function Attachments({attachments, isOwn, onImagePress}) {
 }
 
 // ── Message bubble ─────────────────────────────────────────────────────────
-function MessageBubble({message, isOwn, chatType, onLongPress, onReactionTap, onImagePress}) {
+function MessageBubble({message, isOwn, chatType, isHighlighted, onLongPress, onReactionTap, onImagePress}) {
   if (message.type === 'system') {
     return (
       <View style={styles.systemMsgWrap}>
@@ -187,7 +211,7 @@ function MessageBubble({message, isOwn, chatType, onLongPress, onReactionTap, on
   return (
     <Pressable
       onLongPress={() => !isDeleted && onLongPress(message)}
-      style={[styles.bubbleRow, isOwn ? styles.bubbleRowOwn : styles.bubbleRowOther]}>
+      style={[styles.bubbleRow, isOwn ? styles.bubbleRowOwn : styles.bubbleRowOther, isHighlighted && styles.bubbleRowHighlighted]}>
       {!isOwn && chatType === 'group' && (
         <View style={styles.bubbleAvatar}>
           <Avatar uri={message.sender?.avatar} name={message.sender?.displayName} size={28} />
@@ -202,8 +226,9 @@ function MessageBubble({message, isOwn, chatType, onLongPress, onReactionTap, on
         {/* Forwarded label */}
         {message.forwardedFrom && (
           <View style={[styles.forwardBadge, isOwn && styles.forwardBadgeOwn]}>
+            <Forward size={11} color={isOwn ? 'rgba(255,255,255,0.75)' : colors.textSecondary} style={{marginRight: 4}} />
             <Text style={[styles.forwardLabel, isOwn && styles.forwardLabelOwn]}>
-              ↩ Переслано от {message.forwardedFrom.senderName || 'пользователя'}
+              Переслано от {message.forwardedFrom.senderName || 'пользователя'}
             </Text>
           </View>
         )}
@@ -266,10 +291,62 @@ function MessageBubble({message, isOwn, chatType, onLongPress, onReactionTap, on
   );
 }
 
+// ── Chat header title with avatar + status ───────────────────────────────────
+function ChatHeaderTitle({name, avatar, isOnline, isTyping, chatType}) {
+  const url = avatarUrl(avatar);
+  const initials = (name || '?').split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
+  return (
+    <View style={headerStyles.wrap}>
+      <View style={headerStyles.avatarWrap}>
+        {url ? (
+          <Image source={{uri: url}} style={headerStyles.avatar} />
+        ) : (
+          <View style={headerStyles.avatarPlaceholder}>
+            <Text style={headerStyles.avatarText}>{initials}</Text>
+          </View>
+        )}
+        {chatType === 'private' && isOnline && <View style={headerStyles.onlineDot} />}
+      </View>
+      <View>
+        <Text style={headerStyles.name} numberOfLines={1}>{name || 'Чат'}</Text>
+        {chatType === 'private' && (
+          <Text style={headerStyles.status}>
+            {isTyping ? 'печатает...' : isOnline ? 'онлайн' : 'офлайн'}
+          </Text>
+        )}
+      </View>
+    </View>
+  );
+}
+
+const headerStyles = StyleSheet.create({
+  wrap: {flexDirection: 'row', alignItems: 'center'},
+  avatarWrap: {marginRight: 10, position: 'relative'},
+  avatar: {width: 34, height: 34, borderRadius: 17},
+  avatarPlaceholder: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  avatarText: {fontSize: 13, color: '#FFFFFF', fontFamily: font.semiBold},
+  onlineDot: {
+    position: 'absolute', bottom: 0, right: 0,
+    width: 10, height: 10, borderRadius: 5,
+    backgroundColor: '#34C759', borderWidth: 1.5, borderColor: '#FFFFFF',
+  },
+  name: {fontSize: 16, color: '#FFFFFF', fontFamily: font.semiBold},
+  status: {fontSize: 11, color: 'rgba(255,255,255,0.75)', fontFamily: font.regular},
+});
+
 // ── Main screen ──────────────────────────────────────────────────────────────
 export default function ChatScreen({route, navigation}) {
-  const {chatId, chatName, chatType} = route.params;
+  const {chatId, chatName, chatType, chatAvatar, otherUserId, otherUserIsOnline} = route.params;
   const {user} = useAuth();
+
+  const [isOnline, setIsOnline] = useState(otherUserIsOnline ?? false);
+  const [isTyping, setIsTyping] = useState(false);
+  const typingTimer = useRef(null);      // incoming typing auto-clear
+  const sendTypingTimer = useRef(null);  // outgoing typing_stop debounce
 
   const [messages, setMessages] = useState([]); // newest-first
   const [loading, setLoading] = useState(true);
@@ -277,6 +354,15 @@ export default function ChatScreen({route, navigation}) {
   const [hasMore, setHasMore] = useState(true);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+
+  // In-chat search
+  const flatListRef = useRef(null);
+  const searchInputRef = useRef(null);
+  const [searchMode, setSearchMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchHits, setSearchHits] = useState([]);
+  const [searchIdx, setSearchIdx] = useState(0);
+  const [highlightedMsgId, setHighlightedMsgId] = useState(null);
 
   // Modes
   const [replyTo, setReplyTo] = useState(null);
@@ -303,11 +389,13 @@ export default function ChatScreen({route, navigation}) {
       const params = {limit: 50};
       if (before) params.before = before;
       const res = await chatApi.getMessages(chatId, params);
-      const fetched = Array.isArray(res.data) ? res.data : (res.data.messages ?? []);
-      // Backend returns DESC (newest first)
-      if (fetched.length < 50) setHasMore(false);
+      const raw = Array.isArray(res.data) ? res.data : (res.data.messages ?? []);
+      // Backend: ORDER DESC then .reverse() → oldest-first (ASC)
+      // We need newest-first for inverted FlatList → reverse again
+      const fetched = [...raw].reverse();
+      if (raw.length < 50) setHasMore(false);
       if (before) {
-        // Load older → append to end of array (visually top)
+        // fetched = older messages, newest-first → append to END (visually: top)
         setMessages(prev => {
           const ids = new Set(prev.map(m => m.id));
           return [...prev, ...fetched.filter(m => !ids.has(m.id))];
@@ -323,44 +411,143 @@ export default function ChatScreen({route, navigation}) {
   useEffect(() => {
     loadMessages().finally(() => setLoading(false));
     chatApi.markAsRead(chatId).catch(() => {});
-    navigation.setOptions({title: chatName || 'Чат'});
-  }, [chatId, chatName, loadMessages, navigation]);
+    // Join socket room for typing indicators
+    SocketService.emit('join_chat', {chatId});
+    return () => { SocketService.emit('leave_chat', {chatId}); };
+  }, [chatId, loadMessages]);
+
+  // Update header whenever online/typing/searchMode state changes
+  useEffect(() => {
+    navigation.setOptions({
+      headerTitle: () => (
+        <ChatHeaderTitle
+          name={chatName}
+          avatar={chatAvatar}
+          isOnline={isOnline}
+          isTyping={isTyping}
+          chatType={chatType}
+        />
+      ),
+      headerRight: () => (
+        <TouchableOpacity
+          style={{padding: 4, marginRight: 4}}
+          onPress={() => setSearchMode(v => !v)}>
+          {searchMode
+            ? <X size={22} color="#FFFFFF" />
+            : <Search size={22} color="#FFFFFF" />}
+        </TouchableOpacity>
+      ),
+    });
+  }, [navigation, chatName, chatAvatar, isOnline, isTyping, chatType, searchMode]);
+
+  // Online status + typing listeners
+  useEffect(() => {
+    SocketService.on('chat:user_status', 'user_status_changed', data => {
+      if (String(data.userId) === String(otherUserId)) {
+        setIsOnline(data.isOnline);
+      }
+    });
+    SocketService.on('chat:user_typing', 'user_typing', data => {
+      if (String(data.chatId) === String(chatId) && String(data.userId) !== String(user?.id)) {
+        setIsTyping(data.isTyping);
+        if (data.isTyping) {
+          if (typingTimer.current) clearTimeout(typingTimer.current);
+          typingTimer.current = setTimeout(() => setIsTyping(false), 4000);
+        }
+      }
+    });
+    return () => {
+      SocketService.off('chat:user_status');
+      SocketService.off('chat:user_typing');
+      if (typingTimer.current) clearTimeout(typingTimer.current);
+      if (sendTypingTimer.current) clearTimeout(sendTypingTimer.current);
+    };
+  }, [chatId, otherUserId, user]);
 
   // ── Socket real-time ───────────────────────────────────────────────────────
   useEffect(() => {
     const handleNewMessage = data => {
-      if (data.chatId !== chatId) return;
+      // Backend emits {message, chat: {id, ...}} — chatId is at data.chat.id
+      const incomingChatId = data.chat?.id ?? data.chatId;
+      if (String(incomingChatId) !== String(chatId)) return;
       setMessages(prev => {
         if (prev.some(m => m.id === data.message.id)) return prev;
-        return [data.message, ...prev]; // prepend (newest first)
+        return [data.message, ...prev]; // prepend newest-first
       });
       chatApi.markAsRead(chatId).catch(() => {});
     };
 
     const handleReactionUpdate = data => {
-      if (data.chatId !== chatId) return;
+      const incomingChatId = data.chat?.id ?? data.chatId;
+      if (String(incomingChatId) !== String(chatId)) return;
       setMessages(prev =>
         prev.map(m => m.id === data.messageId ? {...m, reactions: data.reactions} : m),
       );
     };
 
     const handleMsgEdit = data => {
-      if (data.chatId !== chatId) return;
+      const incomingChatId = data.chat?.id ?? data.chatId;
+      if (String(incomingChatId) !== String(chatId)) return;
       setMessages(prev =>
         prev.map(m => m.id === data.messageId ? {...m, content: data.content, isEdited: true} : m),
       );
     };
 
-    SocketService.on('new_message', handleNewMessage);
-    SocketService.on('message_reaction_updated', handleReactionUpdate);
-    SocketService.on('message_edited', handleMsgEdit);
+    SocketService.on('chat:new_message', 'new_message', handleNewMessage);
+    SocketService.on('chat:reaction_updated', 'message_reaction_updated', handleReactionUpdate);
+    SocketService.on('chat:msg_edited', 'message_edited', handleMsgEdit);
 
     return () => {
-      SocketService.off('new_message');
-      SocketService.off('message_reaction_updated');
-      SocketService.off('message_edited');
+      SocketService.off('chat:new_message');
+      SocketService.off('chat:reaction_updated');
+      SocketService.off('chat:msg_edited');
     };
   }, [chatId]);
+
+  // ── In-chat search ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (searchMode) {
+      setTimeout(() => searchInputRef.current?.focus(), 100);
+    } else {
+      setSearchQuery('');
+      setSearchHits([]);
+      setSearchIdx(0);
+      setHighlightedMsgId(null);
+    }
+  }, [searchMode]);
+
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchHits([]);
+      setHighlightedMsgId(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await chatApi.searchMessages(chatId, q);
+        setSearchHits(res.data);
+        setSearchIdx(0);
+      } catch {}
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [searchQuery, chatId]);
+
+  useEffect(() => {
+    if (!searchHits.length) return;
+    const target = searchHits[searchIdx];
+    if (!target) return;
+    setHighlightedMsgId(target.id);
+    // Find in loaded messages
+    const listIdx = listData.findIndex(item => item.id === target.id);
+    if (listIdx !== -1) {
+      flatListRef.current?.scrollToIndex({index: listIdx, animated: true, viewPosition: 0.5});
+    } else if (hasMore) {
+      // Message not loaded yet — load more and retry
+      loadMore();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchIdx, searchHits]);
 
   // ── Load more (older messages) ─────────────────────────────────────────────
   const loadMore = useCallback(() => {
@@ -409,7 +596,11 @@ export default function ChatScreen({route, navigation}) {
         }
       }
 
-      await chatApi.sendMessage(chatId, content, attachments, replyTo?.id ?? null);
+      const res = await chatApi.sendMessage(chatId, content, attachments, replyTo?.id ?? null);
+      setMessages(prev => {
+        if (prev.some(m => m.id === res.data.id)) return prev;
+        return [res.data, ...prev];
+      });
       setReplyTo(null);
     } catch (err) {
       Alert.alert('Ошибка', 'Не удалось отправить сообщение');
@@ -548,22 +739,23 @@ export default function ChatScreen({route, navigation}) {
     return (
       <MessageBubble
         message={item}
-        isOwn={item.senderId === user?.id}
+        isOwn={String(item.senderId) === String(user?.id)}
         chatType={chatType}
+        isHighlighted={item.id === highlightedMsgId}
         onLongPress={handleLongPress}
         onReactionTap={handleReactionTap}
         onImagePress={url => setLightboxUrl(url)}
       />
     );
-  }, [user, chatType]);
+  }, [user, chatType, highlightedMsgId]);
 
   const keyExtractor = useCallback(item =>
-    item._id || item.id?.toString() || `item_${Math.random()}`, []);
+    item._id || (item.id != null ? String(item.id) : item._itemType + '_' + item.date), []);
 
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#2563EB" />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -574,8 +766,42 @@ export default function ChatScreen({route, navigation}) {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
 
+      {/* In-chat search bar */}
+      {searchMode && (
+        <View style={styles.searchBar}>
+          <TextInput
+            ref={searchInputRef}
+            style={styles.searchBarInput}
+            placeholder="Поиск в чате..."
+            placeholderTextColor={colors.textTertiary}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            returnKeyType="search"
+          />
+          {searchHits.length > 0 && (
+            <>
+              <Text style={styles.searchCount}>{searchIdx + 1}/{searchHits.length}</Text>
+              <TouchableOpacity
+                style={styles.searchNavBtn}
+                onPress={() => setSearchIdx(i => Math.max(0, i - 1))}>
+                <ChevronUp size={20} color={colors.primary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.searchNavBtn}
+                onPress={() => setSearchIdx(i => Math.min(searchHits.length - 1, i + 1))}>
+                <ChevronDown size={20} color={colors.primary} />
+              </TouchableOpacity>
+            </>
+          )}
+          {searchQuery.length > 0 && searchHits.length === 0 && (
+            <Text style={styles.searchNone}>Не найдено</Text>
+          )}
+        </View>
+      )}
+
       {/* Messages list (inverted = newest at bottom) */}
       <FlatList
+        ref={flatListRef}
         data={listData}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
@@ -583,8 +809,16 @@ export default function ChatScreen({route, navigation}) {
         contentContainerStyle={styles.msgList}
         onEndReached={loadMore}
         onEndReachedThreshold={0.3}
-        ListFooterComponent={loadingMore ? <ActivityIndicator color="#2563EB" style={{marginVertical: 12}} /> : null}
+        initialNumToRender={20}
+        maxToRenderPerBatch={10}
+        windowSize={10}
         removeClippedSubviews={false}
+        ListFooterComponent={loadingMore ? <ActivityIndicator color={colors.primary} style={{marginVertical: 12}} /> : null}
+        onScrollToIndexFailed={info => {
+          setTimeout(() => {
+            flatListRef.current?.scrollToIndex({index: info.index, animated: true, viewPosition: 0.5});
+          }, 300);
+        }}
       />
 
       {/* Reaction quick-pick (after long press → reaction) */}
@@ -599,7 +833,7 @@ export default function ChatScreen({route, navigation}) {
             </TouchableOpacity>
           ))}
           <TouchableOpacity onPress={() => setShowReactionPicker(null)} style={styles.reactionQuickClose}>
-            <Text style={styles.reactionQuickCloseText}>✕</Text>
+            <X size={18} color={colors.textTertiary} />
           </TouchableOpacity>
         </View>
       )}
@@ -607,10 +841,11 @@ export default function ChatScreen({route, navigation}) {
       {/* Edit mode banner */}
       {editingMessage && (
         <View style={styles.editBanner}>
-          <Text style={styles.editBannerLabel}>✏️ Редактирование</Text>
+          <Pencil size={14} color={colors.primary} style={{marginRight: 6}} />
+          <Text style={styles.editBannerLabel}>Редактирование</Text>
           <Text style={styles.editBannerText} numberOfLines={1}>{editingMessage.content}</Text>
           <TouchableOpacity onPress={cancelEdit}>
-            <Text style={styles.editBannerClose}>✕</Text>
+            <X size={18} color={colors.textTertiary} />
           </TouchableOpacity>
         </View>
       )}
@@ -628,7 +863,7 @@ export default function ChatScreen({route, navigation}) {
             </Text>
           </View>
           <TouchableOpacity onPress={() => setReplyTo(null)}>
-            <Text style={styles.replyBannerClose}>✕</Text>
+            <X size={18} color={colors.textTertiary} />
           </TouchableOpacity>
         </View>
       )}
@@ -642,14 +877,14 @@ export default function ChatScreen({route, navigation}) {
                 <Image source={{uri: f.uri}} style={styles.pendingImage} />
               ) : (
                 <View style={styles.pendingFile}>
-                  <Text style={styles.pendingFileIcon}>📎</Text>
+                  <File size={28} color={colors.textSecondary} />
                 </View>
               )}
               <Text style={styles.pendingName} numberOfLines={1}>{f.name}</Text>
               <TouchableOpacity
                 style={styles.pendingRemove}
                 onPress={() => setPendingFiles(prev => prev.filter((_, i) => i !== idx))}>
-                <Text style={styles.pendingRemoveText}>✕</Text>
+                <X size={10} color="#FFF" strokeWidth={3} />
               </TouchableOpacity>
             </View>
           ))}
@@ -677,7 +912,7 @@ export default function ChatScreen({route, navigation}) {
         <TouchableOpacity
           style={styles.iconBtn}
           onPress={() => {setShowAttachMenu(true); setShowEmojiPicker(false);}}>
-          <Text style={styles.iconBtnText}>📎</Text>
+          <Paperclip size={22} color={colors.textSecondary} />
         </TouchableOpacity>
 
         <TextInput
@@ -685,7 +920,14 @@ export default function ChatScreen({route, navigation}) {
           placeholder={editingMessage ? 'Редактировать...' : 'Сообщение...'}
           placeholderTextColor="#9CA3AF"
           value={text}
-          onChangeText={setText}
+          onChangeText={val => {
+            setText(val);
+            SocketService.emit('typing_start', {chatId});
+            if (sendTypingTimer.current) clearTimeout(sendTypingTimer.current);
+            sendTypingTimer.current = setTimeout(() => {
+              SocketService.emit('typing_stop', {chatId});
+            }, 2000);
+          }}
           multiline
           maxLength={4000}
         />
@@ -693,7 +935,7 @@ export default function ChatScreen({route, navigation}) {
         <TouchableOpacity
           style={styles.iconBtn}
           onPress={() => {setShowEmojiPicker(v => !v); setShowAttachMenu(false);}}>
-          <Text style={styles.iconBtnText}>😊</Text>
+          <Smile size={22} color={showEmojiPicker ? colors.primary : colors.textSecondary} />
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -702,7 +944,7 @@ export default function ChatScreen({route, navigation}) {
           disabled={(!text.trim() && pendingFiles.length === 0) || sending || uploading}>
           {sending || uploading
             ? <ActivityIndicator color="#FFF" size="small" />
-            : <Text style={styles.sendBtnText}>➤</Text>}
+            : <Send size={18} color="#FFF" />}
         </TouchableOpacity>
       </View>
 
@@ -711,15 +953,21 @@ export default function ChatScreen({route, navigation}) {
         <Pressable style={styles.modalOverlay} onPress={() => setShowAttachMenu(false)}>
           <View style={styles.attachMenu}>
             <TouchableOpacity style={styles.attachMenuItem} onPress={pickFromGallery}>
-              <Text style={styles.attachMenuIcon}>🖼️</Text>
+              <View style={styles.attachMenuIconWrap}>
+                <ImageIcon size={26} color={colors.primary} />
+              </View>
               <Text style={styles.attachMenuLabel}>Галерея</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.attachMenuItem} onPress={pickFromCamera}>
-              <Text style={styles.attachMenuIcon}>📷</Text>
+              <View style={styles.attachMenuIconWrap}>
+                <Camera size={26} color={colors.primary} />
+              </View>
               <Text style={styles.attachMenuLabel}>Камера</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.attachMenuItem} onPress={pickFile}>
-              <Text style={styles.attachMenuIcon}>📄</Text>
+              <View style={styles.attachMenuIconWrap}>
+                <File size={26} color={colors.primary} />
+              </View>
               <Text style={styles.attachMenuLabel}>Файл</Text>
             </TouchableOpacity>
           </View>
@@ -750,26 +998,30 @@ export default function ChatScreen({route, navigation}) {
             <TouchableOpacity
               style={styles.contextItem}
               onPress={() => {setContextMenu(null); setReplyTo(contextMenu?.message);}}>
-              <Text style={styles.contextItemText}>↩️ Ответить</Text>
+              <Reply size={18} color={colors.textPrimary} style={styles.contextItemIcon} />
+              <Text style={styles.contextItemText}>Ответить</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.contextItem}
               onPress={() => startForward(contextMenu?.message)}>
-              <Text style={styles.contextItemText}>➡️ Переслать</Text>
+              <Forward size={18} color={colors.textPrimary} style={styles.contextItemIcon} />
+              <Text style={styles.contextItemText}>Переслать</Text>
             </TouchableOpacity>
 
-            {contextMenu?.message?.senderId === user?.id && (
+            {String(contextMenu?.message?.senderId) === String(user?.id) && (
               <>
                 <TouchableOpacity
                   style={styles.contextItem}
                   onPress={() => startEdit(contextMenu?.message)}>
-                  <Text style={styles.contextItemText}>✏️ Редактировать</Text>
+                  <Pencil size={18} color={colors.textPrimary} style={styles.contextItemIcon} />
+                  <Text style={styles.contextItemText}>Редактировать</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.contextItem}
                   onPress={() => handleDelete(contextMenu?.message)}>
-                  <Text style={[styles.contextItemText, styles.contextItemDanger]}>🗑️ Удалить</Text>
+                  <Trash2 size={18} color={colors.error} style={styles.contextItemIcon} />
+                  <Text style={[styles.contextItemText, styles.contextItemDanger]}>Удалить</Text>
                 </TouchableOpacity>
               </>
             )}
@@ -783,7 +1035,7 @@ export default function ChatScreen({route, navigation}) {
           <View style={styles.forwardModalHeader}>
             <Text style={styles.forwardModalTitle}>Переслать в чат</Text>
             <TouchableOpacity onPress={() => setShowForwardModal(false)}>
-              <Text style={styles.forwardModalClose}>✕</Text>
+              <X size={22} color={colors.textTertiary} />
             </TouchableOpacity>
           </View>
           <FlatList
@@ -804,7 +1056,7 @@ export default function ChatScreen({route, navigation}) {
         <Pressable style={styles.lightboxOverlay} onPress={() => setLightboxUrl(null)}>
           <Image source={{uri: lightboxUrl}} style={styles.lightboxImage} resizeMode="contain" />
           <TouchableOpacity style={styles.lightboxClose} onPress={() => setLightboxUrl(null)}>
-            <Text style={styles.lightboxCloseText}>✕</Text>
+            <X size={20} color="#FFF" />
           </TouchableOpacity>
         </Pressable>
       </Modal>
@@ -814,143 +1066,140 @@ export default function ChatScreen({route, navigation}) {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: {flex: 1, backgroundColor: '#F3F4F6'},
+  container: {flex: 1, backgroundColor: colors.bgSecondary},
   center: {flex: 1, alignItems: 'center', justifyContent: 'center'},
   msgList: {paddingVertical: 8, paddingHorizontal: 10},
 
   // Date separator
   dateSep: {alignItems: 'center', marginVertical: 10},
   dateSepText: {
-    fontSize: 12, color: '#6B7280',
-    backgroundColor: '#E5E7EB', paddingHorizontal: 12, paddingVertical: 3,
-    borderRadius: 10,
+    fontSize: 12, fontFamily: font.regular, color: colors.textSecondary,
+    backgroundColor: colors.borderLight, paddingHorizontal: 12, paddingVertical: 3,
+    borderRadius: radius.md,
   },
 
   // System message
   systemMsgWrap: {alignItems: 'center', marginVertical: 4},
-  systemMsgText: {fontSize: 12, color: '#9CA3AF', fontStyle: 'italic'},
+  systemMsgText: {fontSize: 12, fontFamily: font.regular, color: colors.textTertiary, fontStyle: 'italic'},
 
   // Bubble row
   bubbleRow: {flexDirection: 'row', marginVertical: 2, paddingHorizontal: 4},
   bubbleRowOwn: {justifyContent: 'flex-end'},
   bubbleRowOther: {justifyContent: 'flex-start'},
+  bubbleRowHighlighted: {backgroundColor: 'rgba(255, 214, 0, 0.25)', borderRadius: 8},
   bubbleAvatar: {marginRight: 6, marginTop: 4},
-  avatarPlaceholder: {backgroundColor: '#DBEAFE', alignItems: 'center', justifyContent: 'center'},
-  avatarText: {fontWeight: '700', color: '#2563EB'},
+  avatarPlaceholder: {backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center'},
+  avatarText: {fontFamily: font.bold, color: colors.primary},
 
   bubbleContent: {maxWidth: '78%'},
-  senderName: {fontSize: 12, color: '#2563EB', marginBottom: 2, marginLeft: 12},
+  senderName: {fontSize: 12, fontFamily: font.regular, color: colors.primary, marginBottom: 2, marginLeft: 12},
 
   // Forward / reply
   forwardBadge: {
-    borderLeftWidth: 3, borderLeftColor: '#9CA3AF',
+    flexDirection: 'row', alignItems: 'center',
+    borderLeftWidth: 3, borderLeftColor: colors.textTertiary,
     paddingLeft: 8, marginBottom: 3,
-    backgroundColor: '#F3F4F6', borderRadius: 4, paddingVertical: 2, paddingRight: 8,
+    backgroundColor: colors.bgSecondary, borderRadius: 4, paddingVertical: 2, paddingRight: 8,
   },
   forwardBadgeOwn: {backgroundColor: 'rgba(255,255,255,0.2)', borderLeftColor: 'rgba(255,255,255,0.6)'},
-  forwardLabel: {fontSize: 11, color: '#6B7280', fontStyle: 'italic'},
+  forwardLabel: {fontSize: 11, fontFamily: font.regular, color: colors.textSecondary, fontStyle: 'italic'},
   forwardLabelOwn: {color: 'rgba(255,255,255,0.75)'},
 
   replyBadge: {
-    borderLeftWidth: 3, borderLeftColor: '#2563EB',
+    borderLeftWidth: 3, borderLeftColor: colors.primary,
     paddingLeft: 8, marginBottom: 3,
-    backgroundColor: '#EFF6FF', borderRadius: 4, paddingVertical: 2, paddingRight: 8,
+    backgroundColor: colors.primaryLight, borderRadius: 4, paddingVertical: 2, paddingRight: 8,
   },
   replyBadgeOwn: {backgroundColor: 'rgba(255,255,255,0.2)', borderLeftColor: 'rgba(255,255,255,0.6)'},
-  replyAuthor: {fontSize: 11, fontWeight: '600', color: '#2563EB'},
+  replyAuthor: {fontSize: 11, fontFamily: font.semiBold, color: colors.primary},
   replyAuthorOwn: {color: 'rgba(255,255,255,0.9)'},
-  replyText: {fontSize: 12, color: '#4B5563'},
+  replyText: {fontSize: 12, fontFamily: font.regular, color: colors.textSecondary},
   replyTextOwn: {color: 'rgba(255,255,255,0.75)'},
 
   // Bubble
-  bubble: {borderRadius: 16, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6},
-  bubbleOther: {backgroundColor: '#FFFFFF', borderBottomLeftRadius: 4, elevation: 1, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 3, shadowOffset: {width: 0, height: 1}},
-  bubbleOwn: {backgroundColor: '#2563EB', borderBottomRightRadius: 4},
-  msgText: {fontSize: 15, color: '#111827', lineHeight: 21},
-  msgTextOwn: {color: '#FFFFFF'},
-  deletedText: {fontSize: 14, color: '#9CA3AF', fontStyle: 'italic'},
+  bubble: {borderRadius: radius.lg, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6},
+  bubbleOther: {backgroundColor: colors.bgPrimary, borderBottomLeftRadius: 4, elevation: 1, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 3, shadowOffset: {width: 0, height: 1}},
+  bubbleOwn: {backgroundColor: colors.primary, borderBottomRightRadius: 4},
+  msgText: {fontSize: 15, fontFamily: font.regular, color: colors.textPrimary, lineHeight: 21},
+  msgTextOwn: {color: colors.bgPrimary},
+  deletedText: {fontSize: 14, fontFamily: font.regular, color: colors.textTertiary, fontStyle: 'italic'},
   bubbleMeta: {flexDirection: 'row', justifyContent: 'flex-end', marginTop: 2, alignItems: 'center'},
-  timeText: {fontSize: 11, color: '#9CA3AF'},
+  timeText: {fontSize: 11, fontFamily: font.regular, color: colors.textTertiary},
   timeTextOwn: {color: 'rgba(255,255,255,0.65)'},
-  editedLabel: {fontSize: 11, color: '#9CA3AF', fontStyle: 'italic'},
+  editedLabel: {fontSize: 11, fontFamily: font.regular, color: colors.textTertiary, fontStyle: 'italic'},
   editedLabelOwn: {color: 'rgba(255,255,255,0.6)'},
 
   // Reactions
   reactionsRow: {flexDirection: 'row', flexWrap: 'wrap', marginTop: 4, gap: 4},
   reactionChip: {
-    backgroundColor: '#F3F4F6', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 3,
-    borderWidth: 1, borderColor: '#E5E7EB',
+    backgroundColor: colors.bgSecondary, borderRadius: radius.md, paddingHorizontal: 8, paddingVertical: 3,
+    borderWidth: 1, borderColor: colors.borderLight,
   },
-  reactionChipActive: {backgroundColor: '#EFF6FF', borderColor: '#2563EB'},
-  reactionChipText: {fontSize: 13},
+  reactionChipActive: {backgroundColor: colors.primaryLight, borderColor: colors.primary},
+  reactionChipText: {fontSize: 13, fontFamily: font.regular},
 
   // Attachments
   attachmentsWrap: {marginBottom: 4},
   attachImage: {width: SCREEN_WIDTH * 0.55, height: SCREEN_WIDTH * 0.45, borderRadius: 8, marginBottom: 4},
   attachFile: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#F3F4F6', borderRadius: 8, padding: 8, marginBottom: 4,
+    backgroundColor: colors.bgSecondary, borderRadius: 8, padding: 8, marginBottom: 4,
   },
   attachFileOwn: {backgroundColor: 'rgba(255,255,255,0.15)'},
   attachFileIcon: {fontSize: 22, marginRight: 8},
   attachFileInfo: {flex: 1},
-  attachFileName: {fontSize: 13, color: '#111827', fontWeight: '500'},
-  attachFileNameOwn: {color: '#FFFFFF'},
-  attachFileSize: {fontSize: 11, color: '#6B7280', marginTop: 1},
+  attachFileName: {fontSize: 13, color: colors.textPrimary, fontFamily: font.medium},
+  attachFileNameOwn: {color: colors.bgPrimary},
+  attachFileSize: {fontSize: 11, fontFamily: font.regular, color: colors.textSecondary, marginTop: 1},
   attachFileSizeOwn: {color: 'rgba(255,255,255,0.7)'},
 
   // Reaction quick pick
   reactionQuickPick: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FFFFFF', paddingVertical: 10, paddingHorizontal: 12,
-    borderTopWidth: 1, borderTopColor: '#F3F4F6',
+    backgroundColor: colors.bgPrimary, paddingVertical: 10, paddingHorizontal: 12,
+    borderTopWidth: 1, borderTopColor: colors.bgSecondary,
     elevation: 4,
   },
   reactionQuickBtn: {paddingHorizontal: 6},
   reactionQuickText: {fontSize: 26},
-  reactionQuickClose: {marginLeft: 'auto', paddingHorizontal: 8},
-  reactionQuickCloseText: {fontSize: 18, color: '#9CA3AF'},
+  reactionQuickClose: {marginLeft: 'auto', paddingHorizontal: 8, paddingVertical: 4},
 
   // Edit / reply banners
   editBanner: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#EFF6FF', paddingHorizontal: 16, paddingVertical: 8,
+    backgroundColor: colors.primaryLight, paddingHorizontal: 16, paddingVertical: 8,
     borderTopWidth: 1, borderTopColor: '#BFDBFE',
   },
-  editBannerLabel: {fontSize: 12, color: '#2563EB', fontWeight: '600', marginRight: 8},
-  editBannerText: {flex: 1, fontSize: 13, color: '#374151'},
-  editBannerClose: {fontSize: 16, color: '#9CA3AF', paddingLeft: 8},
+  editBannerLabel: {fontSize: 12, color: colors.primary, fontFamily: font.semiBold, marginRight: 8},
+  editBannerText: {flex: 1, fontSize: 13, fontFamily: font.regular, color: colors.textPrimary},
   replyBanner: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: '#F9FAFB', paddingHorizontal: 16, paddingVertical: 8,
-    borderTopWidth: 1, borderTopColor: '#E5E7EB',
+    borderTopWidth: 1, borderTopColor: colors.borderLight,
   },
-  replyBannerBar: {width: 3, height: '100%', backgroundColor: '#2563EB', borderRadius: 2, marginRight: 10},
+  replyBannerBar: {width: 3, height: '100%', backgroundColor: colors.primary, borderRadius: 2, marginRight: 10},
   replyBannerContent: {flex: 1},
-  replyBannerName: {fontSize: 12, fontWeight: '600', color: '#2563EB'},
-  replyBannerText: {fontSize: 13, color: '#6B7280'},
-  replyBannerClose: {fontSize: 16, color: '#9CA3AF', paddingLeft: 8},
+  replyBannerName: {fontSize: 12, fontFamily: font.semiBold, color: colors.primary},
+  replyBannerText: {fontSize: 13, fontFamily: font.regular, color: colors.textSecondary},
 
   // Pending files
   pendingRow: {
-    backgroundColor: '#FFFFFF', paddingVertical: 8, paddingHorizontal: 10,
-    borderTopWidth: 1, borderTopColor: '#F3F4F6', maxHeight: 90,
+    backgroundColor: colors.bgPrimary, paddingVertical: 8, paddingHorizontal: 10,
+    borderTopWidth: 1, borderTopColor: colors.bgSecondary, maxHeight: 90,
   },
   pendingItem: {alignItems: 'center', marginRight: 10, width: 70},
   pendingImage: {width: 60, height: 60, borderRadius: 6},
-  pendingFile: {width: 60, height: 60, backgroundColor: '#F3F4F6', borderRadius: 6, alignItems: 'center', justifyContent: 'center'},
-  pendingFileIcon: {fontSize: 28},
-  pendingName: {fontSize: 10, color: '#6B7280', marginTop: 2},
+  pendingFile: {width: 60, height: 60, backgroundColor: colors.bgSecondary, borderRadius: 6, alignItems: 'center', justifyContent: 'center'},
+  pendingName: {fontSize: 10, fontFamily: font.regular, color: colors.textSecondary, marginTop: 2},
   pendingRemove: {
     position: 'absolute', top: 0, right: 0,
-    backgroundColor: '#EF4444', borderRadius: 8, width: 16, height: 16,
+    backgroundColor: colors.error, borderRadius: 8, width: 16, height: 16,
     alignItems: 'center', justifyContent: 'center',
   },
-  pendingRemoveText: {color: '#FFF', fontSize: 10, fontWeight: '700'},
 
   // Emoji panel
   emojiPanel: {
-    backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#E5E7EB', maxHeight: 180,
+    backgroundColor: colors.bgPrimary, borderTopWidth: 1, borderTopColor: colors.borderLight, maxHeight: 180,
   },
   emojiGrid: {flexDirection: 'row', flexWrap: 'wrap', padding: 8},
   emojiBtn: {padding: 6},
@@ -959,58 +1208,59 @@ const styles = StyleSheet.create({
   // Input bar
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end',
-    backgroundColor: '#FFFFFF', paddingHorizontal: 8, paddingVertical: 8,
-    borderTopWidth: 1, borderTopColor: '#E5E7EB',
+    backgroundColor: colors.bgPrimary, paddingHorizontal: 8, paddingVertical: 8,
+    borderTopWidth: 1, borderTopColor: colors.borderLight,
   },
   iconBtn: {width: 40, height: 40, alignItems: 'center', justifyContent: 'center'},
-  iconBtnText: {fontSize: 22},
   textInput: {
-    flex: 1, backgroundColor: '#F3F4F6', borderRadius: 20,
+    flex: 1, backgroundColor: colors.bgSecondary, borderRadius: radius.xl,
     paddingHorizontal: 14, paddingTop: 9, paddingBottom: 9,
-    fontSize: 15, color: '#111827', maxHeight: 120,
+    fontSize: 15, fontFamily: font.regular, color: colors.textPrimary, maxHeight: 120,
   },
   sendBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: '#2563EB', alignItems: 'center', justifyContent: 'center', marginLeft: 6,
+    width: 40, height: 40, borderRadius: radius.xl,
+    backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', marginLeft: 6,
   },
-  sendBtnOff: {backgroundColor: '#BFDBFE'},
-  sendBtnText: {fontSize: 16, color: '#FFF'},
+  sendBtnOff: {backgroundColor: colors.primaryLight},
 
   // Modals
   modalOverlay: {flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end'},
   attachMenu: {
-    backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    backgroundColor: colors.bgPrimary, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,
     flexDirection: 'row', paddingVertical: 24, paddingHorizontal: 20, justifyContent: 'space-around',
   },
   attachMenuItem: {alignItems: 'center'},
-  attachMenuIcon: {fontSize: 36, marginBottom: 6},
-  attachMenuLabel: {fontSize: 13, color: '#374151'},
+  attachMenuIconWrap: {
+    width: 60, height: 60, borderRadius: radius.lg,
+    backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center', marginBottom: 8,
+  },
+  attachMenuLabel: {fontSize: 13, fontFamily: font.regular, color: colors.textPrimary},
 
   contextMenu: {
-    backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    backgroundColor: colors.bgPrimary, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,
     padding: 16,
   },
   contextReactions: {flexDirection: 'row', justifyContent: 'space-around', paddingVertical: 8},
   contextReactionBtn: {padding: 6},
   contextReactionText: {fontSize: 28},
-  contextDivider: {height: 1, backgroundColor: '#F3F4F6', marginVertical: 8},
-  contextItem: {paddingVertical: 14, paddingHorizontal: 8},
-  contextItemText: {fontSize: 16, color: '#111827'},
-  contextItemDanger: {color: '#EF4444'},
+  contextDivider: {height: 1, backgroundColor: colors.bgSecondary, marginVertical: 8},
+  contextItem: {flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 8},
+  contextItemIcon: {marginRight: 14},
+  contextItemText: {fontSize: 16, fontFamily: font.regular, color: colors.textPrimary},
+  contextItemDanger: {color: colors.error},
 
   // Forward modal
   forwardModal: {
-    flex: 1, marginTop: 80, backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    flex: 1, marginTop: 80, backgroundColor: colors.bgPrimary,
+    borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,
   },
   forwardModalHeader: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    padding: 20, borderBottomWidth: 1, borderBottomColor: '#F3F4F6',
+    padding: 20, borderBottomWidth: 1, borderBottomColor: colors.bgSecondary,
   },
-  forwardModalTitle: {fontSize: 17, fontWeight: '700', color: '#111827'},
-  forwardModalClose: {fontSize: 20, color: '#9CA3AF'},
+  forwardModalTitle: {fontSize: 17, fontFamily: font.bold, color: colors.textPrimary},
   forwardChatItem: {flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12},
-  forwardChatName: {fontSize: 15, color: '#111827'},
+  forwardChatName: {fontSize: 15, fontFamily: font.regular, color: colors.textPrimary},
 
   // Lightbox
   lightboxOverlay: {
@@ -1023,5 +1273,40 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 20, width: 40, height: 40,
     alignItems: 'center', justifyContent: 'center',
   },
-  lightboxCloseText: {color: '#FFF', fontSize: 18},
+
+  // In-chat search bar
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.bgPrimary,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+    gap: 6,
+  },
+  searchBarInput: {
+    flex: 1,
+    height: 36,
+    backgroundColor: colors.bgSecondary,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    fontSize: 14,
+    fontFamily: font.regular,
+    color: colors.textPrimary,
+  },
+  searchCount: {
+    fontSize: 13,
+    fontFamily: font.medium,
+    color: colors.textSecondary,
+    minWidth: 36,
+    textAlign: 'center',
+  },
+  searchNavBtn: {padding: 4},
+  searchNone: {
+    fontSize: 13,
+    fontFamily: font.regular,
+    color: colors.textTertiary,
+    paddingRight: 4,
+  },
 });

@@ -1,4 +1,4 @@
-import React, {useEffect, useState, useCallback} from 'react';
+import React, {useEffect, useState, useCallback, useRef} from 'react';
 import {
   View,
   Text,
@@ -11,10 +11,12 @@ import {
   Image,
 } from 'react-native';
 import {useFocusEffect} from '@react-navigation/native';
+import {Search} from 'lucide-react-native';
 import {chat as chatApi} from '../../services/api';
 import SocketService from '../../services/socket';
 import {useAuth} from '../../store/authStore';
 import avatarUrl from '../../utils/avatarUrl';
+import {colors, radius, shadow, font} from '../../theme';
 
 function Avatar({uri, name, size = 44}) {
   const url = avatarUrl(uri);
@@ -34,27 +36,28 @@ function Avatar({uri, name, size = 44}) {
     .toUpperCase();
   return (
     <View style={[styles.avatarPlaceholder, {width: size, height: size, borderRadius: size / 2}]}>
-      <Text style={styles.avatarText}>{initials}</Text>
+      <Text style={[styles.avatarText, {fontSize: size * 0.36}]}>{initials}</Text>
     </View>
   );
 }
 
-function ChatItem({item, onPress, currentUserId}) {
+function ChatItem({item, onPress}) {
   const unread = item.unreadCount > 0;
   const lastMsg = item.lastMessage;
 
   return (
-    <TouchableOpacity style={styles.chatItem} onPress={() => onPress(item)}>
-      <Avatar uri={item.avatar} name={item.displayName} />
+    <TouchableOpacity style={styles.chatItem} onPress={() => onPress(item)} activeOpacity={0.7}>
+      <Avatar
+        uri={item.type === 'private' ? (item.otherUser?.avatar || item.avatar) : item.avatar}
+        name={item.displayName}
+      />
       <View style={styles.chatInfo}>
         <View style={styles.chatHeader}>
           <Text style={[styles.chatName, unread && styles.chatNameBold]} numberOfLines={1}>
             {item.displayName || 'Чат'}
           </Text>
           {item.lastMessageAt && (
-            <Text style={styles.chatTime}>
-              {formatTime(item.lastMessageAt)}
-            </Text>
+            <Text style={styles.chatTime}>{formatTime(item.lastMessageAt)}</Text>
           )}
         </View>
         <View style={styles.chatFooter}>
@@ -87,11 +90,14 @@ function formatTime(iso) {
 }
 
 export default function ChatListScreen({navigation}) {
-  const {user, logout} = useAuth();
+  const {user} = useAuth();
   const [chats, setChats] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const initialLoadDone = useRef(false);
 
   const loadChats = useCallback(async () => {
     try {
@@ -104,31 +110,43 @@ export default function ChatListScreen({navigation}) {
 
   useFocusEffect(
     useCallback(() => {
-      loadChats().finally(() => setLoading(false));
+      if (!initialLoadDone.current) {
+        // First load — show spinner until data arrives
+        loadChats().finally(() => {
+          setLoading(false);
+          initialLoadDone.current = true;
+        });
+      } else {
+        // Subsequent focus — refresh silently without clearing the list
+        setLoading(false);
+        loadChats();
+      }
     }, [loadChats]),
   );
 
-  // Real-time: update chat list when new message arrives
   useEffect(() => {
-    SocketService.on('new_message', data => {
-      setChats(prev =>
-        prev.map(c =>
-          c.id === data.chatId
+    SocketService.on('chatlist:new_message', 'new_message', data => {
+      const incomingChatId = data.chat?.id ?? data.chatId;
+      setChats(prev => {
+        const updated = prev.map(c =>
+          String(c.id) === String(incomingChatId)
             ? {
                 ...c,
                 lastMessage: data.message,
                 lastMessageAt: data.message.createdAt,
                 unreadCount:
-                  data.message.senderId !== user?.id
+                  String(data.message.senderId) !== String(user?.id)
                     ? (c.unreadCount || 0) + 1
                     : c.unreadCount,
               }
             : c,
-        ).sort((a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt)),
-      );
+        );
+        return updated.sort(
+          (a, b) => new Date(b.lastMessageAt) - new Date(a.lastMessageAt),
+        );
+      });
     });
-
-    return () => SocketService.off('new_message');
+    return () => SocketService.off('chatlist:new_message');
   }, [user]);
 
   const onRefresh = async () => {
@@ -137,112 +155,147 @@ export default function ChatListScreen({navigation}) {
     setRefreshing(false);
   };
 
-  const filteredChats = search.trim()
-    ? chats.filter(c =>
-        (c.displayName || '').toLowerCase().includes(search.toLowerCase()),
-      )
-    : chats;
+  // Debounced backend search when query is long enough
+  useEffect(() => {
+    const q = search.trim();
+    if (q.length < 2) {
+      setSearchResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        setSearching(true);
+        const res = await chatApi.search(q);
+        setSearchResults(res.data);
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const filteredChats = search.trim().length >= 2 ? searchResults : chats;
 
   const openChat = chat => {
     navigation.navigate('Chat', {
       chatId: chat.id,
-      chatName: chat.displayName,
-      chatAvatar: chat.avatar,
+      chatName: chat.displayName || chat.name,
+      chatAvatar: chat.type === 'private' ? (chat.otherUser?.avatar || chat.avatar) : chat.avatar,
       chatType: chat.type,
+      otherUserId: chat.otherUser?.id,
+      otherUserIsOnline: chat.otherUser?.isOnline ?? false,
     });
   };
 
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#2563EB" />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
+      {/* Search bar */}
       <View style={styles.searchBox}>
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Поиск чатов..."
-          placeholderTextColor="#9CA3AF"
-          value={search}
-          onChangeText={setSearch}
-        />
+        <View style={styles.searchInner}>
+          <Search size={16} color={colors.textTertiary} style={{marginRight: 8}} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Поиск чатов..."
+            placeholderTextColor={colors.textTertiary}
+            value={search}
+            onChangeText={setSearch}
+          />
+        </View>
       </View>
 
       <FlatList
         data={filteredChats}
         keyExtractor={(item, index) => item.id?.toString() || `chat_${index}`}
         renderItem={({item}) => (
-          <ChatItem item={item} onPress={openChat} currentUserId={user?.id} />
+          <ChatItem item={item} onPress={openChat} />
         )}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+          />
         }
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyText}>Нет чатов</Text>
+            {searching
+              ? <ActivityIndicator color={colors.primary} />
+              : <Text style={styles.emptyText}>
+                  {search.trim().length >= 2 ? 'Ничего не найдено' : 'Нет чатов'}
+                </Text>
+            }
           </View>
         }
         ItemSeparatorComponent={() => <View style={styles.separator} />}
       />
 
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => navigation.navigate('NewChat')}>
-        <Text style={styles.fabIcon}>+</Text>
-      </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {flex: 1, backgroundColor: '#FFFFFF'},
+  container: {flex: 1, backgroundColor: colors.bgPrimary},
   center: {flex: 1, alignItems: 'center', justifyContent: 'center'},
+
   searchBox: {
     paddingHorizontal: 16,
     paddingVertical: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.bgPrimary,
     borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    borderBottomColor: colors.borderLight,
+  },
+  searchInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.bgSecondary,
+    borderRadius: radius.lg,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
   searchInput: {
-    backgroundColor: '#F3F4F6',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+    flex: 1,
     fontSize: 15,
-    color: '#111827',
+    fontFamily: font.regular,
+    color: colors.textPrimary,
   },
+
   chatItem: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 13,
   },
   avatar: {resizeMode: 'cover'},
   avatarPlaceholder: {
-    backgroundColor: '#DBEAFE',
+    backgroundColor: colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarText: {fontSize: 16, fontWeight: '600', color: '#2563EB'},
-  chatInfo: {flex: 1, marginLeft: 12},
+  avatarText: {fontFamily: font.semiBold, color: colors.primary},
+  chatInfo: {flex: 1, marginLeft: 13},
   chatHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 3,
   },
-  chatName: {fontSize: 15, color: '#111827', flex: 1, marginRight: 8},
-  chatNameBold: {fontWeight: '600'},
-  chatTime: {fontSize: 12, color: '#9CA3AF'},
+  chatName: {fontSize: 15, color: colors.textPrimary, flex: 1, marginRight: 8, fontFamily: font.regular},
+  chatNameBold: {fontFamily: font.semiBold},
+  chatTime: {fontSize: 12, color: colors.textTertiary, fontFamily: font.regular},
   chatFooter: {flexDirection: 'row', alignItems: 'center'},
-  lastMessage: {fontSize: 13, color: '#6B7280', flex: 1},
-  lastMessageBold: {color: '#374151', fontWeight: '500'},
+  lastMessage: {fontSize: 14, color: colors.textSecondary, flex: 1, fontFamily: font.regular},
+  lastMessageBold: {color: colors.textPrimary, fontFamily: font.medium},
   badge: {
-    backgroundColor: '#2563EB',
+    backgroundColor: colors.primary,
     borderRadius: 10,
     minWidth: 20,
     height: 20,
@@ -250,25 +303,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 5,
   },
-  badgeText: {color: '#FFFFFF', fontSize: 11, fontWeight: '600'},
-  separator: {height: 1, backgroundColor: '#F3F4F6', marginLeft: 72},
+  badgeText: {color: '#FFFFFF', fontSize: 11, fontFamily: font.semiBold},
+  separator: {height: 1, backgroundColor: colors.borderLight, marginLeft: 73},
   empty: {paddingTop: 60, alignItems: 'center'},
-  emptyText: {fontSize: 15, color: '#9CA3AF'},
-  fab: {
-    position: 'absolute',
-    bottom: 24,
-    right: 20,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: '#2563EB',
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 6,
-    shadowColor: '#2563EB',
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    shadowOffset: {width: 0, height: 4},
-  },
-  fabIcon: {fontSize: 28, color: '#FFFFFF', lineHeight: 32},
+  emptyText: {fontSize: 15, color: colors.textTertiary, fontFamily: font.regular},
+
 });
